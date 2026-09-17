@@ -11,18 +11,23 @@ from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
     QListWidget,
     QListWidgetItem,
+    QInputDialog,
+    QMenu,
+    QMessageBox,
     QMainWindow,
     QPlainTextEdit,
     QSplitter,
     QTabWidget,
     QTextBrowser,
     QToolBar,
+    QToolButton,
     QTreeWidget,
     QTreeWidgetItem,
 )
 
 from pigo_notes.config import VaultConfig
 from pigo_notes.models import Task
+from pigo_notes.services.git_service import GitResult, GitService
 from pigo_notes.services.markdown_service import MarkdownService
 from pigo_notes.services.task_service import TaskService
 from pigo_notes.services.vault_service import VaultService
@@ -36,6 +41,7 @@ class MainWindow(QMainWindow):
         self._config = config
         self._vault = VaultService(config.vault_root)
         self._tasks = TaskService(self._vault)
+        self._git = GitService(config.vault_root)
         self._markdown = MarkdownService()
         self._current_note: Path | None = None
         self._settings_path = config.app_root / "app_data" / "settings.json"
@@ -77,6 +83,9 @@ class MainWindow(QMainWindow):
         self.info_panel.addTab(self.backlinks, "反向連結")
         self.info_panel.addTab(self.task_list, "任務")
         self.info_panel.addTab(self.git_info, "Git")
+        self.ai_placeholder = QTextBrowser()
+        self.ai_placeholder.setHtml("<p><b>AI Assistant</b></p><p>Coming soon — no data is sent in V1.</p>")
+        self.info_panel.addTab(self.ai_placeholder, "AI")
 
         self.workspace = QSplitter(Qt.Orientation.Horizontal)
         self.workspace.addWidget(self.note_tree)
@@ -109,6 +118,17 @@ class MainWindow(QMainWindow):
         tasks.setToolTip("顯示所有 Markdown 待辦")
         tasks.triggered.connect(self.refresh_tasks)
         toolbar.addAction(tasks)
+
+        git_button = QToolButton()
+        git_button.setText("⑂")
+        git_button.setToolTip("Git 快速操作")
+        self.git_menu = QMenu(self)
+        for label, handler in (("Pull", self.pull_vault), ("Commit", self.commit_vault), ("Merge", self.merge_vault), ("Push", self.push_vault), ("Branch", self.branch_vault)):
+            action = self.git_menu.addAction(label)
+            action.triggered.connect(handler)
+        git_button.setMenu(self.git_menu)
+        git_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
+        toolbar.addWidget(git_button)
 
         save = QAction("儲存", self)
         save.setShortcut("Ctrl+S")
@@ -153,6 +173,45 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已儲存", 2500)
         self._render_preview()
 
+
+    def pull_vault(self) -> None:
+        if self._confirm("Pull", "從遠端拉取目前分支的變更？"):
+            self._show_git_result("Pull", self._git.pull())
+
+    def commit_vault(self) -> None:
+        count = self._git.changed_file_count()
+        message, accepted = QInputDialog.getText(self, "Commit", f"將提交 {count} 個已變更檔案。提交訊息：")
+        if accepted and message.strip() and self._confirm("Commit", f"提交 {count} 個已變更檔案？"):
+            self._show_git_result("Commit", self._git.commit_all(message))
+
+    def merge_vault(self) -> None:
+        branch, accepted = QInputDialog.getText(self, "Merge", "要合併的分支：")
+        if accepted and branch.strip() and self._confirm("Merge", f"合併分支 {branch.strip()}？"):
+            self._show_git_result("Merge", self._git.merge(branch))
+
+    def push_vault(self) -> None:
+        if self._confirm("Push", "推送目前分支到遠端？"):
+            self._show_git_result("Push", self._git.push())
+
+    def branch_vault(self) -> None:
+        action, accepted = QInputDialog.getItem(self, "Branch", "動作：", ["建立", "切換"], 0, False)
+        if not accepted:
+            return
+        branch, accepted = QInputDialog.getText(self, "Branch", "分支名稱：")
+        if not accepted or not branch.strip():
+            return
+        result = self._git.create_branch(branch) if action == "建立" else self._git.switch_branch(branch)
+        self._show_git_result("Branch", result)
+
+    def _confirm(self, title: str, message: str) -> bool:
+        return QMessageBox.question(self, title, message) == QMessageBox.StandardButton.Yes
+
+    def _show_git_result(self, action: str, result: GitResult) -> None:
+        message = result.output or ("完成" if result.succeeded else "失敗")
+        if result.succeeded:
+            QMessageBox.information(self, action, message)
+        else:
+            QMessageBox.warning(self, action, message)
     def _task_checked(self, item: QListWidgetItem) -> None:
         task = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(task, Task):

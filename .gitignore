@@ -7,3 +7,4 @@ htmlcov/
 .superpowers/
 app_data/
 STATUS_ALL.md
+.tmp_pytest/

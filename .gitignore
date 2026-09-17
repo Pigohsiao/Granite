@@ -8,3 +8,4 @@ htmlcov/
 app_data/
 STATUS_ALL.md
 .tmp_pytest/
+*.egg-info/

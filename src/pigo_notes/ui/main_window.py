@@ -3,11 +3,14 @@
 from __future__ import annotations
 
 import json
+from datetime import date
 from pathlib import Path
 
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QListWidget,
+    QListWidgetItem,
     QMainWindow,
     QPlainTextEdit,
     QSplitter,
@@ -16,11 +19,12 @@ from PySide6.QtWidgets import (
     QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
-    QWidget,
 )
 
 from pigo_notes.config import VaultConfig
+from pigo_notes.models import Task
 from pigo_notes.services.markdown_service import MarkdownService
+from pigo_notes.services.task_service import TaskService
 from pigo_notes.services.vault_service import VaultService
 
 
@@ -31,6 +35,7 @@ class MainWindow(QMainWindow):
         super().__init__()
         self._config = config
         self._vault = VaultService(config.vault_root)
+        self._tasks = TaskService(self._vault)
         self._markdown = MarkdownService()
         self._current_note: Path | None = None
         self._settings_path = config.app_root / "app_data" / "settings.json"
@@ -42,6 +47,10 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self.refresh_tree()
         self._apply_layout()
+
+    @property
+    def current_note(self) -> Path | None:
+        return self._current_note
 
     def _build_workspace(self) -> None:
         self.note_tree = QTreeWidget()
@@ -62,8 +71,11 @@ class MainWindow(QMainWindow):
         self.backlinks = QTextBrowser()
         self.git_info = QTextBrowser()
         self.git_info.setHtml("<p>Git 快速操作將顯示在工具列。</p>")
+        self.task_list = QListWidget()
+        self.task_list.itemChanged.connect(self._task_checked)
         self.info_panel.addTab(self.info_preview, "預覽")
         self.info_panel.addTab(self.backlinks, "反向連結")
+        self.info_panel.addTab(self.task_list, "任務")
         self.info_panel.addTab(self.git_info, "Git")
 
         self.workspace = QSplitter(Qt.Orientation.Horizontal)
@@ -88,6 +100,16 @@ class MainWindow(QMainWindow):
         refresh.triggered.connect(self.refresh_tree)
         toolbar.addAction(refresh)
 
+        today = QAction("今天", self)
+        today.setToolTip("開啟今日筆記")
+        today.triggered.connect(self.open_today)
+        toolbar.addAction(today)
+
+        tasks = QAction("任務", self)
+        tasks.setToolTip("顯示所有 Markdown 待辦")
+        tasks.triggered.connect(self.refresh_tasks)
+        toolbar.addAction(tasks)
+
         save = QAction("儲存", self)
         save.setShortcut("Ctrl+S")
         save.triggered.connect(self.save_current_note)
@@ -99,6 +121,25 @@ class MainWindow(QMainWindow):
             item = QTreeWidgetItem([note.relative_path.as_posix()])
             item.setData(0, Qt.ItemDataRole.UserRole, note.relative_path)
             self.note_tree.addTopLevelItem(item)
+
+    def refresh_tasks(self) -> None:
+        self.task_list.blockSignals(True)
+        self.task_list.clear()
+        for task in self._tasks.list_tasks():
+            item = QListWidgetItem(f"{task.source_path.as_posix()} — {task.text}")
+            item.setData(Qt.ItemDataRole.UserRole, task)
+            item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
+            item.setCheckState(Qt.CheckState.Checked if task.completed else Qt.CheckState.Unchecked)
+            self.task_list.addItem(item)
+        self.task_list.blockSignals(False)
+        self.layout_mode = "three_column"
+        self._apply_layout()
+        self.info_panel.setCurrentWidget(self.task_list)
+
+    def open_today(self, note_date: date | None = None) -> None:
+        relative_path = self._vault.open_or_create_daily_note(note_date or date.today())
+        self.refresh_tree()
+        self._set_current_note(relative_path)
 
     def toggle_layout(self) -> None:
         self.layout_mode = "three_column" if self.layout_mode == "two_column" else "two_column"
@@ -112,14 +153,22 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已儲存", 2500)
         self._render_preview()
 
+    def _task_checked(self, item: QListWidgetItem) -> None:
+        task = item.data(Qt.ItemDataRole.UserRole)
+        if not isinstance(task, Task):
+            return
+        self._tasks.set_completed(task, item.checkState() == Qt.CheckState.Checked)
+        self.refresh_tasks()
+
     def _open_selected_note(self) -> None:
         selected = self.note_tree.selectedItems()
-        if not selected:
-            return
-        relative_path = selected[0].data(0, Qt.ItemDataRole.UserRole)
-        self._current_note = Path(relative_path)
+        if selected:
+            self._set_current_note(Path(selected[0].data(0, Qt.ItemDataRole.UserRole)))
+
+    def _set_current_note(self, relative_path: Path) -> None:
+        self._current_note = relative_path
         self.editor.blockSignals(True)
-        self.editor.setPlainText(self._vault.read_note(self._current_note))
+        self.editor.setPlainText(self._vault.read_note(relative_path))
         self.editor.blockSignals(False)
         self._render_preview()
 
@@ -135,10 +184,7 @@ class MainWindow(QMainWindow):
             return
         notes = {note.relative_path: self._vault.read_note(note.relative_path) for note in self._vault.list_notes()}
         targets = self._markdown.find_backlinks(notes, self._current_note.stem)
-        if targets:
-            self.backlinks.setHtml("<br>".join(path.as_posix() for path in targets))
-        else:
-            self.backlinks.setHtml("<p>沒有反向連結</p>")
+        self.backlinks.setHtml("<br>".join(path.as_posix() for path in targets) if targets else "<p>沒有反向連結</p>")
 
     def _apply_layout(self) -> None:
         is_three_column = self.layout_mode == "three_column"
@@ -154,7 +200,4 @@ class MainWindow(QMainWindow):
 
     def _save_layout_mode(self) -> None:
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
-        self._settings_path.write_text(
-            json.dumps({"layout_mode": self.layout_mode}, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        self._settings_path.write_text(json.dumps({"layout_mode": self.layout_mode}, ensure_ascii=False, indent=2), encoding="utf-8")

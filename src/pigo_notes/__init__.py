@@ -1,0 +1,1 @@
+"""Pigo Notes App package."""

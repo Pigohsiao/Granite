@@ -9,3 +9,6 @@ app_data/
 STATUS_ALL.md
 .tmp_pytest/
 *.egg-info/
+
+.diagnostics/
+.tmp_pytest*/

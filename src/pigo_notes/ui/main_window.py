@@ -1,4 +1,4 @@
-"""Main PySide6 workspace for a fixed local Markdown Vault."""
+"""Read-only PySide6 workspace for a fixed local Markdown Vault."""
 
 from __future__ import annotations
 
@@ -9,13 +9,12 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction
 from PySide6.QtWidgets import (
+    QInputDialog,
     QListWidget,
     QListWidgetItem,
-    QInputDialog,
+    QMainWindow,
     QMenu,
     QMessageBox,
-    QMainWindow,
-    QPlainTextEdit,
     QSplitter,
     QTabWidget,
     QTextBrowser,
@@ -34,7 +33,7 @@ from pigo_notes.services.vault_service import VaultService
 
 
 class MainWindow(QMainWindow):
-    """Two-column-by-default note workspace with an optional information pane."""
+    """Two-column read-only note workspace with an optional information pane."""
 
     def __init__(self, config: VaultConfig) -> None:
         super().__init__()
@@ -63,24 +62,15 @@ class MainWindow(QMainWindow):
         self.note_tree.setHeaderLabel("Vault")
         self.note_tree.itemSelectionChanged.connect(self._open_selected_note)
 
-        self.editor = QPlainTextEdit()
-        self.editor.setPlaceholderText("選擇一篇 Markdown 筆記開始編輯")
-        self.editor.textChanged.connect(self._render_preview)
-        self.preview = QTextBrowser()
-
-        self.center_tabs = QTabWidget()
-        self.center_tabs.addTab(self.editor, "編輯")
-        self.center_tabs.addTab(self.preview, "預覽")
+        self.note_preview = QTextBrowser()
+        self.note_preview.setOpenExternalLinks(True)
+        self.note_preview.setPlaceholderText("選擇一篇 Markdown 筆記開始預覽")
 
         self.info_panel = QTabWidget()
-        self.info_preview = QTextBrowser()
-        self.backlinks = QTextBrowser()
         self.git_info = QTextBrowser()
         self.git_info.setHtml("<p>Git 快速操作將顯示在工具列。</p>")
         self.task_list = QListWidget()
         self.task_list.itemChanged.connect(self._task_checked)
-        self.info_panel.addTab(self.info_preview, "預覽")
-        self.info_panel.addTab(self.backlinks, "反向連結")
         self.info_panel.addTab(self.task_list, "任務")
         self.info_panel.addTab(self.git_info, "Git")
         self.ai_placeholder = QTextBrowser()
@@ -89,7 +79,7 @@ class MainWindow(QMainWindow):
 
         self.workspace = QSplitter(Qt.Orientation.Horizontal)
         self.workspace.addWidget(self.note_tree)
-        self.workspace.addWidget(self.center_tabs)
+        self.workspace.addWidget(self.note_preview)
         self.workspace.addWidget(self.info_panel)
         self.workspace.setSizes([280, 720, 280])
         self.setCentralWidget(self.workspace)
@@ -123,17 +113,18 @@ class MainWindow(QMainWindow):
         git_button.setText("⑂")
         git_button.setToolTip("Git 快速操作")
         self.git_menu = QMenu(self)
-        for label, handler in (("Pull", self.pull_vault), ("Commit", self.commit_vault), ("Merge", self.merge_vault), ("Push", self.push_vault), ("Branch", self.branch_vault)):
+        for label, handler in (
+            ("Pull", self.pull_vault),
+            ("Commit", self.commit_vault),
+            ("Merge", self.merge_vault),
+            ("Push", self.push_vault),
+            ("Branch", self.branch_vault),
+        ):
             action = self.git_menu.addAction(label)
             action.triggered.connect(handler)
         git_button.setMenu(self.git_menu)
         git_button.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         toolbar.addWidget(git_button)
-
-        save = QAction("儲存", self)
-        save.setShortcut("Ctrl+S")
-        save.triggered.connect(self.save_current_note)
-        toolbar.addAction(save)
 
     def refresh_tree(self) -> None:
         self.note_tree.clear()
@@ -165,14 +156,6 @@ class MainWindow(QMainWindow):
         self.layout_mode = "three_column" if self.layout_mode == "two_column" else "two_column"
         self._apply_layout()
         self._save_layout_mode()
-
-    def save_current_note(self) -> None:
-        if self._current_note is None:
-            return
-        self._vault.save_note(self._current_note, self.editor.toPlainText())
-        self.statusBar().showMessage("已儲存", 2500)
-        self._render_preview()
-
 
     def pull_vault(self) -> None:
         if self._confirm("Pull", "從遠端拉取目前分支的變更？"):
@@ -212,6 +195,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(self, action, message)
         else:
             QMessageBox.warning(self, action, message)
+
     def _task_checked(self, item: QListWidgetItem) -> None:
         task = item.data(Qt.ItemDataRole.UserRole)
         if not isinstance(task, Task):
@@ -226,24 +210,8 @@ class MainWindow(QMainWindow):
 
     def _set_current_note(self, relative_path: Path) -> None:
         self._current_note = relative_path
-        self.editor.blockSignals(True)
-        self.editor.setPlainText(self._vault.read_note(relative_path))
-        self.editor.blockSignals(False)
-        self._render_preview()
-
-    def _render_preview(self) -> None:
-        rendered = self._markdown.render(self.editor.toPlainText())
-        self.preview.setHtml(rendered)
-        self.info_preview.setHtml(rendered)
-        self._render_backlinks()
-
-    def _render_backlinks(self) -> None:
-        if self._current_note is None:
-            self.backlinks.clear()
-            return
-        notes = {note.relative_path: self._vault.read_note(note.relative_path) for note in self._vault.list_notes()}
-        targets = self._markdown.find_backlinks(notes, self._current_note.stem)
-        self.backlinks.setHtml("<br>".join(path.as_posix() for path in targets) if targets else "<p>沒有反向連結</p>")
+        content = self._vault.read_note(relative_path)
+        self.note_preview.setHtml(self._markdown.render(content))
 
     def _apply_layout(self) -> None:
         is_three_column = self.layout_mode == "three_column"

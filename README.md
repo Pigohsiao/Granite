@@ -12,8 +12,8 @@ Windows 本機版 Markdown Vault 工具，直接操作 `C:\Users\hsi67063\Docume
 
 ## 第一版功能
 
-- Vault Markdown 瀏覽、編輯、儲存與預覽
-- `[[筆記連結]]` 與反向連結
+- Vault Markdown 快速瀏覽與唯讀預覽（選取筆記時只讀取單一檔案）
+- `[[筆記連結]]` Markdown 顯示（反向連結索引功能規劃中）
 - 全文搜尋服務
 - 每日筆記與 Vault 全域 Markdown 待辦清單
 - 雙欄預設與精簡圖示三欄切換

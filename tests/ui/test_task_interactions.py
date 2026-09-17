@@ -22,7 +22,7 @@ def test_today_creates_and_opens_the_daily_note(tmp_path: Path) -> None:
     window.open_today(date(2026, 9, 17))
 
     assert window.current_note == Path("Daily Notes/2026-09-17.md")
-    assert window.editor.toPlainText() == "# 2026-09-17\n"
+    assert window.note_preview.toPlainText() == "2026-09-17"
     window.close()
     app.processEvents()
 

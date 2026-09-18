@@ -51,6 +51,11 @@ class MainWindow(QMainWindow):
         self.set_preview_font_size(self.preview_font_size, persist=False)
         self.refresh_tree()
 
+    def show_for_user(self) -> None:
+        """Open as a normal, movable Windows window instead of maximized."""
+        self.showNormal()
+        self.raise_()
+        self.activateWindow()
     @property
     def current_note(self) -> Path | None:
         return self._current_note

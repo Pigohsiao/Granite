@@ -13,7 +13,7 @@ def main() -> int:
     config.validate()
     application = QApplication(sys.argv)
     window = MainWindow(config)
-    window.show()
+    window.show_for_user()
     return application.exec()
 
 

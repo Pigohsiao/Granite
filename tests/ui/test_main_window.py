@@ -75,3 +75,29 @@ def test_focus_workspace_uses_obsidian_inspired_dark_surfaces(tmp_path: Path) ->
     assert "QTreeWidget" in window.styleSheet()
     window.close()
     app.processEvents()
+
+def test_focus_workspace_exposes_a_system_drag_bar(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(make_config(tmp_path))
+
+    assert window.drag_bar.objectName() == "dragBar"
+    assert window.drag_bar.window() is window
+    window.close()
+    app.processEvents()
+
+
+def test_theme_toggle_is_persisted(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    window = MainWindow(config)
+
+    assert window.theme_mode == "dark"
+    window.toggle_theme()
+    assert window.theme_mode == "light"
+    assert "#f7f7f5" in window.styleSheet()
+    window.close()
+
+    restored = MainWindow(config)
+    assert restored.theme_mode == "light"
+    restored.close()
+    app.processEvents()

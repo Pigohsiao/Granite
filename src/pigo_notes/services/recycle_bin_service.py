@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import os
 import subprocess
 
 
@@ -10,7 +11,8 @@ class RecycleBinService:
     """Moves only Vault children to the Windows Recycle Bin."""
 
     _SCRIPT = (
-        "& { param([string]$Target, [string]$Kind) "
+        "& { $Target = $env:PIGO_RECYCLE_TARGET; $Kind = $env:PIGO_RECYCLE_KIND; "
+        "if ([string]::IsNullOrWhiteSpace($Target) -or [string]::IsNullOrWhiteSpace($Kind)) { throw 'Recycle target is missing.' }; "
         "Add-Type -AssemblyName Microsoft.VisualBasic; "
         "if ($Kind -eq 'directory') { "
         "[Microsoft.VisualBasic.FileIO.FileSystem]::DeleteDirectory($Target, "
@@ -42,11 +44,15 @@ class RecycleBinService:
         target = self.target_for(relative_path)
         if target.is_dir() != is_directory:
             raise ValueError("Target type does not match the requested recycle operation.")
+        environment = os.environ.copy()
+        environment["PIGO_RECYCLE_TARGET"] = str(target)
+        environment["PIGO_RECYCLE_KIND"] = "directory" if is_directory else "file"
         result = subprocess.run(
-            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", self._SCRIPT, str(target), "directory" if is_directory else "file"],
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", self._SCRIPT],
             capture_output=True,
             text=True,
             encoding="utf-8",
+            env=environment,
         )
         if result.returncode != 0:
             raise RuntimeError(result.stderr.strip() or result.stdout.strip() or "Unable to move the target to the Recycle Bin.")

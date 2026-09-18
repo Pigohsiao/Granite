@@ -168,7 +168,7 @@ class MainWindow(QMainWindow):
         self.increase_font_action.triggered.connect(self.increase_preview_font)
         toolbar.addAction(self.increase_font_action)
 
-    def refresh_tree(self) -> None:
+    def refresh_tree(self, *, expanded_folders: set[Path] | None = None) -> None:
         self.note_tree.clear()
         folders: dict[Path, QTreeWidgetItem] = {}
         for note in self._vault.list_notes():
@@ -181,6 +181,10 @@ class MainWindow(QMainWindow):
             else:
                 parent.addChild(item)
         self.note_tree.collapseAll()
+        for folder in expanded_folders or set():
+            item = folders.get(folder)
+            if item is not None:
+                item.setExpanded(True)
 
     def _ensure_folder(self, folder: Path, folders: dict[Path, QTreeWidgetItem]) -> QTreeWidgetItem | None:
         if folder == Path("."):
@@ -245,6 +249,7 @@ class MainWindow(QMainWindow):
         )
         if answer != QMessageBox.StandardButton.Yes:
             return
+        expanded_folders = self._expanded_folder_paths()
         try:
             self._recycle_bin.move_to_recycle_bin(relative_path, is_directory=is_directory)
         except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
@@ -253,7 +258,22 @@ class MainWindow(QMainWindow):
         if self._current_note is not None and (self._current_note == relative_path or is_directory and relative_path in self._current_note.parents):
             self._current_note = None
             self.note_preview.clear()
-        self.refresh_tree()
+        self.refresh_tree(expanded_folders=expanded_folders)
+
+    def _expanded_folder_paths(self) -> set[Path]:
+        expanded: set[Path] = set()
+
+        def visit(item: QTreeWidgetItem) -> None:
+            if item.data(0, Qt.ItemDataRole.UserRole + 1) == "folder" and item.isExpanded():
+                relative_path = item.data(0, Qt.ItemDataRole.UserRole)
+                if isinstance(relative_path, Path):
+                    expanded.add(relative_path)
+            for index in range(item.childCount()):
+                visit(item.child(index))
+
+        for index in range(self.note_tree.topLevelItemCount()):
+            visit(self.note_tree.topLevelItem(index))
+        return expanded
     def _open_selected_note(self) -> None:
         selected = self.note_tree.selectedItems()
         if not selected:

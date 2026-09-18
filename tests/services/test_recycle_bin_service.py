@@ -39,5 +39,9 @@ def test_recycle_uses_fixed_windows_recycle_bin_script(tmp_path: Path, monkeypat
     command = captured["command"]
     assert isinstance(command, list)
     assert "SendToRecycleBin" in command[4]
-    assert str(note) in command
-    assert captured["kwargs"] == {"capture_output": True, "text": True, "encoding": "utf-8"}
+    assert str(note) not in command
+    assert captured["kwargs"]["capture_output"] is True
+    assert captured["kwargs"]["text"] is True
+    assert captured["kwargs"]["encoding"] == "utf-8"
+    assert captured["kwargs"]["env"]["PIGO_RECYCLE_TARGET"] == str(note)
+    assert captured["kwargs"]["env"]["PIGO_RECYCLE_KIND"] == "file"

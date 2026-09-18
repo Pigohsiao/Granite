@@ -117,3 +117,15 @@ def test_file_explorer_marks_file_and_folder_delete_targets(tmp_path: Path) -> N
     assert note.data(0, Qt.ItemDataRole.UserRole) == Path("Folder/Note.md")
     window.close()
     app.processEvents()
+
+def test_refresh_tree_can_restore_expanded_folder_paths(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    VaultService(config.vault_root).save_note(Path("Folder/Note.md"), "# Note\n")
+    window = MainWindow(config)
+
+    window.refresh_tree(expanded_folders={Path("Folder")})
+
+    assert window.note_tree.topLevelItem(0).isExpanded() is True
+    window.close()
+    app.processEvents()

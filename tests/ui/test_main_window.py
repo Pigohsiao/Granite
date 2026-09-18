@@ -3,6 +3,7 @@ from pathlib import Path
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication, QToolBar
 
 from pigo_notes.config import VaultConfig
@@ -100,4 +101,19 @@ def test_theme_toggle_is_persisted(tmp_path: Path) -> None:
     restored = MainWindow(config)
     assert restored.theme_mode == "light"
     restored.close()
+    app.processEvents()
+
+def test_file_explorer_marks_file_and_folder_delete_targets(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    VaultService(config.vault_root).save_note(Path("Folder/Note.md"), "# Note\n")
+    window = MainWindow(config)
+
+    folder = window.note_tree.topLevelItem(0)
+    note = folder.child(0)
+    assert folder.data(0, Qt.ItemDataRole.UserRole + 1) == "folder"
+    assert note.data(0, Qt.ItemDataRole.UserRole + 1) == "file"
+    assert folder.data(0, Qt.ItemDataRole.UserRole) == Path("Folder")
+    assert note.data(0, Qt.ItemDataRole.UserRole) == Path("Folder/Note.md")
+    window.close()
     app.processEvents()

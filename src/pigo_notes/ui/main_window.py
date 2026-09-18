@@ -11,6 +11,8 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QMainWindow,
+    QMenu,
+    QMessageBox,
     QPushButton,
     QSplitter,
     QTextBrowser,
@@ -22,6 +24,7 @@ from PySide6.QtWidgets import (
 
 from pigo_notes.config import VaultConfig
 from pigo_notes.services.markdown_service import MarkdownService
+from pigo_notes.services.recycle_bin_service import RecycleBinService
 from pigo_notes.services.vault_service import VaultService
 
 
@@ -84,6 +87,7 @@ class MainWindow(QMainWindow):
         self._config = config
         self._vault = VaultService(config.vault_root)
         self._markdown = MarkdownService()
+        self._recycle_bin = RecycleBinService(config.vault_root)
         self._current_note: Path | None = None
         self._settings_path = config.app_root / "app_data" / "settings.json"
         settings = self._load_settings()
@@ -131,6 +135,8 @@ class MainWindow(QMainWindow):
         self.note_tree.setHeaderLabel("檔案總管")
         self.note_tree.setIndentation(18)
         self.note_tree.itemSelectionChanged.connect(self._open_selected_note)
+        self.note_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.note_tree.customContextMenuRequested.connect(self._show_file_menu)
 
         self.note_preview = QTextBrowser()
         self.note_preview.setOpenExternalLinks(True)
@@ -169,6 +175,7 @@ class MainWindow(QMainWindow):
             parent = self._ensure_folder(note.relative_path.parent, folders)
             item = QTreeWidgetItem([note.relative_path.name])
             item.setData(0, Qt.ItemDataRole.UserRole, note.relative_path)
+            item.setData(0, Qt.ItemDataRole.UserRole + 1, "file")
             if parent is None:
                 self.note_tree.addTopLevelItem(item)
             else:
@@ -182,6 +189,8 @@ class MainWindow(QMainWindow):
             return folders[folder]
         parent = self._ensure_folder(folder.parent, folders)
         item = QTreeWidgetItem([folder.name])
+        item.setData(0, Qt.ItemDataRole.UserRole, folder)
+        item.setData(0, Qt.ItemDataRole.UserRole + 1, "folder")
         item.setExpanded(False)
         if parent is None:
             self.note_tree.addTopLevelItem(item)
@@ -214,12 +223,44 @@ class MainWindow(QMainWindow):
         if persist:
             self._save_settings()
 
+    def _show_file_menu(self, position: object) -> None:
+        item = self.note_tree.itemAt(position)
+        if item is None:
+            return
+        relative_path = item.data(0, Qt.ItemDataRole.UserRole)
+        item_kind = item.data(0, Qt.ItemDataRole.UserRole + 1)
+        if item_kind not in {"file", "folder"} or not isinstance(relative_path, Path):
+            return
+        menu = QMenu(self)
+        recycle_action = menu.addAction("移到資源回收桶")
+        recycle_action.triggered.connect(lambda: self._confirm_recycle(relative_path, item_kind == "folder"))
+        menu.exec(self.note_tree.viewport().mapToGlobal(position))
+
+    def _confirm_recycle(self, relative_path: Path, is_directory: bool) -> None:
+        item_type = "資料夾" if is_directory else "檔案"
+        answer = QMessageBox.question(
+            self,
+            "移到資源回收桶",
+            f"確定將這個{item_type}移到 Windows 資源回收桶？\n\n{relative_path.as_posix()}",
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._recycle_bin.move_to_recycle_bin(relative_path, is_directory=is_directory)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
+            QMessageBox.warning(self, "無法移到資源回收桶", str(error))
+            return
+        if self._current_note is not None and (self._current_note == relative_path or is_directory and relative_path in self._current_note.parents):
+            self._current_note = None
+            self.note_preview.clear()
+        self.refresh_tree()
     def _open_selected_note(self) -> None:
         selected = self.note_tree.selectedItems()
         if not selected:
             return
         relative_path = selected[0].data(0, Qt.ItemDataRole.UserRole)
-        if isinstance(relative_path, Path):
+        item_kind = selected[0].data(0, Qt.ItemDataRole.UserRole + 1)
+        if item_kind == "file" and isinstance(relative_path, Path):
             self._set_current_note(relative_path)
 
     def _set_current_note(self, relative_path: Path) -> None:
@@ -232,7 +273,7 @@ class MainWindow(QMainWindow):
         folder = relative_path.parent
         while folder != Path("."):
             for item in self.note_tree.findItems(folder.name, Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchRecursive):
-                if item.data(0, Qt.ItemDataRole.UserRole) is None:
+                if item.data(0, Qt.ItemDataRole.UserRole + 1) == "folder":
                     item.setExpanded(True)
                     break
             folder = folder.parent

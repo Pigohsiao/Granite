@@ -143,3 +143,20 @@ def test_copy_note_full_path_places_resolved_vault_path_on_clipboard(tmp_path: P
     assert QApplication.clipboard().text() == str((config.vault_root / relative_path).resolve())
     window.close()
     app.processEvents()
+
+
+def test_folder_context_menu_includes_copy_full_path_action(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    VaultService(config.vault_root).save_note(Path("Folder/Note.md"), "# Note\n")
+    window = MainWindow(config)
+
+    menu = window._build_file_menu(Path("Folder"), "folder")
+
+    assert [action.text() for action in menu.actions()] == [
+        "複製當前檔案完整路徑",
+        "移到資源回收桶",
+    ]
+    menu.deleteLater()
+    window.close()
+    app.processEvents()

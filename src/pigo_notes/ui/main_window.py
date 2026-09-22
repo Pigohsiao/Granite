@@ -236,13 +236,16 @@ class MainWindow(QMainWindow):
         item_kind = item.data(0, Qt.ItemDataRole.UserRole + 1)
         if item_kind not in {"file", "folder"} or not isinstance(relative_path, Path):
             return
+        menu = self._build_file_menu(relative_path, item_kind)
+        menu.exec(self.note_tree.viewport().mapToGlobal(position))
+
+    def _build_file_menu(self, relative_path: Path, item_kind: str) -> QMenu:
         menu = QMenu(self)
-        if item_kind == "file":
-            copy_path_action = menu.addAction("複製當前檔案完整路徑")
-            copy_path_action.triggered.connect(lambda: self._copy_note_full_path(relative_path))
+        copy_path_action = menu.addAction("複製當前檔案完整路徑")
+        copy_path_action.triggered.connect(lambda: self._copy_note_full_path(relative_path))
         recycle_action = menu.addAction("移到資源回收桶")
         recycle_action.triggered.connect(lambda: self._confirm_recycle(relative_path, item_kind == "folder"))
-        menu.exec(self.note_tree.viewport().mapToGlobal(position))
+        return menu
 
     def _copy_note_full_path(self, relative_path: Path) -> None:
         vault_root = self._config.vault_root.resolve()

@@ -19,3 +19,24 @@ def test_markdown_preview_does_not_preserve_script_tags() -> None:
 
     assert "<h1>Heading</h1>" in html
     assert "<script" not in html
+
+
+def test_markdown_preview_renders_extended_standard_structures() -> None:
+    source = """# Heading
+
+> Quoted text
+
+Term
+: Definition
+
+A footnote.[^1]
+
+[^1]: Footnote text
+"""
+
+    html = MarkdownService().render(source)
+
+    assert "<h1>Heading</h1>" in html
+    assert "<blockquote>" in html
+    assert "<dl>" in html
+    assert "footnote" in html

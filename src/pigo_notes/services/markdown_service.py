@@ -21,4 +21,4 @@ class MarkdownService:
 
     def render(self, source: str) -> str:
         safe_source = self._SCRIPT.sub("", source)
-        return markdown.markdown(safe_source, extensions=["fenced_code", "tables"])
+        return markdown.markdown(safe_source, extensions=["extra"])

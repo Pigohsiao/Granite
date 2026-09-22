@@ -160,3 +160,15 @@ def test_folder_context_menu_includes_copy_full_path_action(tmp_path: Path) -> N
     menu.deleteLater()
     window.close()
     app.processEvents()
+
+
+def test_preview_document_has_markdown_table_styles(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    window = MainWindow(make_config(tmp_path))
+
+    stylesheet = window.note_preview.document().defaultStyleSheet()
+    assert "table" in stylesheet
+    assert "border-collapse" in stylesheet
+
+    window.close()
+    app.processEvents()

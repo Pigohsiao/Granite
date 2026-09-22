@@ -83,6 +83,32 @@ class MainWindow(QMainWindow):
         QScrollBar::handle:vertical { background: #c5c5c7; min-height: 26px; border-radius: 4px; }
     """
 
+    DARK_PREVIEW_CSS = """
+        body { color: #dcddde; line-height: 1.6; }
+        h1, h2, h3 { color: #f0edff; margin-top: 1.2em; }
+        h1 { border-bottom: 1px solid #4a4c54; padding-bottom: 0.3em; }
+        table { border-collapse: collapse; margin: 1em 0; }
+        th, td { border: 1px solid #4a4c54; padding: 6px 10px; }
+        th { background: #303239; }
+        blockquote { border-left: 3px solid #a78bfa; color: #b9bbc0; margin-left: 0; padding-left: 12px; }
+        hr { border: 0; border-top: 1px solid #4a4c54; }
+        code { background: #303239; color: #f0edff; }
+        pre { background: #191a1d; border: 1px solid #34363c; padding: 12px; }
+    """
+
+    LIGHT_PREVIEW_CSS = """
+        body { color: #27282b; line-height: 1.6; }
+        h1, h2, h3 { color: #27282b; margin-top: 1.2em; }
+        h1 { border-bottom: 1px solid #d5d5d0; padding-bottom: 0.3em; }
+        table { border-collapse: collapse; margin: 1em 0; }
+        th, td { border: 1px solid #c5c5c7; padding: 6px 10px; }
+        th { background: #eeeeeb; }
+        blockquote { border-left: 3px solid #8064d8; color: #55575c; margin-left: 0; padding-left: 12px; }
+        hr { border: 0; border-top: 1px solid #d5d5d0; }
+        code { background: #eeeeeb; color: #27282b; }
+        pre { background: #f0f0ed; border: 1px solid #d5d5d0; padding: 12px; }
+    """
+
     def __init__(self, config: VaultConfig) -> None:
         super().__init__()
         self._config = config
@@ -224,6 +250,9 @@ class MainWindow(QMainWindow):
 
     def _apply_theme(self, *, persist: bool) -> None:
         self.setStyleSheet(self.LIGHT_STYLESHEET if self.theme_mode == "light" else self.DARK_STYLESHEET)
+        self.note_preview.document().setDefaultStyleSheet(
+            self.LIGHT_PREVIEW_CSS if self.theme_mode == "light" else self.DARK_PREVIEW_CSS
+        )
         self.theme_button.setText("☾" if self.theme_mode == "dark" else "☀")
         if persist:
             self._save_settings()

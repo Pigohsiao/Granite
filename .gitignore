@@ -12,3 +12,4 @@ STATUS_ALL.md
 
 .diagnostics/
 .tmp_pytest*/
+.worktrees/

@@ -8,6 +8,7 @@ from pathlib import Path
 from PySide6.QtCore import Qt
 from PySide6.QtGui import QAction, QMouseEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -236,9 +237,23 @@ class MainWindow(QMainWindow):
         if item_kind not in {"file", "folder"} or not isinstance(relative_path, Path):
             return
         menu = QMenu(self)
+        if item_kind == "file":
+            copy_path_action = menu.addAction("複製當前檔案完整路徑")
+            copy_path_action.triggered.connect(lambda: self._copy_note_full_path(relative_path))
         recycle_action = menu.addAction("移到資源回收桶")
         recycle_action.triggered.connect(lambda: self._confirm_recycle(relative_path, item_kind == "folder"))
         menu.exec(self.note_tree.viewport().mapToGlobal(position))
+
+    def _copy_note_full_path(self, relative_path: Path) -> None:
+        vault_root = self._config.vault_root.resolve()
+        target = (vault_root / relative_path).resolve()
+        try:
+            target.relative_to(vault_root)
+        except ValueError:
+            QMessageBox.warning(self, "無法複製路徑", "檔案路徑不在目前 Vault 內。")
+            return
+        QApplication.clipboard().setText(str(target))
+        self.statusBar().showMessage("已複製完整檔案路徑", 3000)
 
     def _confirm_recycle(self, relative_path: Path, is_directory: bool) -> None:
         item_type = "資料夾" if is_directory else "檔案"

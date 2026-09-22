@@ -129,3 +129,17 @@ def test_refresh_tree_can_restore_expanded_folder_paths(tmp_path: Path) -> None:
     assert window.note_tree.topLevelItem(0).isExpanded() is True
     window.close()
     app.processEvents()
+
+
+def test_copy_note_full_path_places_resolved_vault_path_on_clipboard(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    relative_path = Path("Folder/Note.md")
+    VaultService(config.vault_root).save_note(relative_path, "# Note\n")
+    window = MainWindow(config)
+
+    window._copy_note_full_path(relative_path)
+
+    assert QApplication.clipboard().text() == str((config.vault_root / relative_path).resolve())
+    window.close()
+    app.processEvents()

@@ -4,7 +4,7 @@ from pathlib import Path
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 from PySide6.QtCore import Qt
-from PySide6.QtWidgets import QApplication, QToolBar
+from PySide6.QtWidgets import QApplication, QFontComboBox, QToolBar
 
 from pigo_notes.config import VaultConfig
 from pigo_notes.services.vault_service import VaultService
@@ -65,6 +65,27 @@ def test_preview_font_size_is_bounded_and_persisted(tmp_path: Path) -> None:
 
     restored = MainWindow(config)
     assert restored.preview_font_size == 12
+    restored.close()
+    app.processEvents()
+
+
+def test_preview_font_family_is_selected_and_persisted(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    window = MainWindow(config)
+
+    selector = window.findChild(QFontComboBox)
+    assert selector is not None
+    selected_family = selector.currentFont().family()
+    window.set_preview_font_family(selected_family)
+
+    assert window.preview_font_family == selected_family
+    assert window.note_preview.font().family() == selected_family
+    window.close()
+
+    restored = MainWindow(config)
+    assert restored.preview_font_family == selected_family
+    assert restored.note_preview.font().family() == selected_family
     restored.close()
     app.processEvents()
 

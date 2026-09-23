@@ -6,9 +6,10 @@ import json
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QMouseEvent
+from PySide6.QtGui import QAction, QFont, QFontDatabase, QMouseEvent
 from PySide6.QtWidgets import (
     QApplication,
+    QFontComboBox,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -119,6 +120,9 @@ class MainWindow(QMainWindow):
         self._settings_path = config.app_root / "app_data" / "settings.json"
         settings = self._load_settings()
         self.preview_font_size = self._bounded_font_size(settings.get("preview_font_size", self.DEFAULT_PREVIEW_FONT_SIZE))
+        self.preview_font_family = self._validated_preview_font_family(
+            settings.get("preview_font_family", QApplication.font().family())
+        )
         self.theme_mode = settings.get("theme_mode", self.DEFAULT_THEME)
         if self.theme_mode not in {"dark", "light"}:
             self.theme_mode = self.DEFAULT_THEME
@@ -130,6 +134,7 @@ class MainWindow(QMainWindow):
         self._build_toolbar()
         self._apply_theme(persist=False)
         self.set_preview_font_size(self.preview_font_size, persist=False)
+        self.set_preview_font_family(self.preview_font_family, persist=False)
         self.refresh_tree()
 
     @property
@@ -195,6 +200,15 @@ class MainWindow(QMainWindow):
         self.increase_font_action.triggered.connect(self.increase_preview_font)
         toolbar.addAction(self.increase_font_action)
 
+        self.preview_font_selector = QFontComboBox(toolbar)
+        self.preview_font_selector.setToolTip("選擇右側預覽字型")
+        self.preview_font_selector.setMaximumWidth(180)
+        self.preview_font_selector.setCurrentFont(QFont(self.preview_font_family))
+        self.preview_font_selector.currentFontChanged.connect(
+            lambda font: self.set_preview_font_family(font.family())
+        )
+        toolbar.addWidget(self.preview_font_selector)
+
     def refresh_tree(self, *, expanded_folders: set[Path] | None = None) -> None:
         self.note_tree.clear()
         folders: dict[Path, QTreeWidgetItem] = {}
@@ -241,6 +255,16 @@ class MainWindow(QMainWindow):
         self.note_preview.setStyleSheet(f"QTextBrowser {{ font-size: {self.preview_font_size}px; }}")
         self.decrease_font_action.setEnabled(self.preview_font_size > self.MIN_PREVIEW_FONT_SIZE)
         self.increase_font_action.setEnabled(self.preview_font_size < self.MAX_PREVIEW_FONT_SIZE)
+        if persist:
+            self._save_settings()
+
+    def set_preview_font_family(self, family: object, *, persist: bool = True) -> None:
+        self.preview_font_family = self._validated_preview_font_family(family)
+        font = self.note_preview.font()
+        font.setFamily(self.preview_font_family)
+        self.note_preview.setFont(font)
+        if self.preview_font_selector.currentFont().family() != self.preview_font_family:
+            self.preview_font_selector.setCurrentFont(QFont(self.preview_font_family))
         if persist:
             self._save_settings()
 
@@ -354,8 +378,16 @@ class MainWindow(QMainWindow):
 
     def _save_settings(self) -> None:
         self._settings_path.parent.mkdir(parents=True, exist_ok=True)
-        payload = {"preview_font_size": self.preview_font_size, "theme_mode": self.theme_mode}
+        payload = {
+            "preview_font_size": self.preview_font_size,
+            "preview_font_family": self.preview_font_family,
+            "theme_mode": self.theme_mode,
+        }
         self._settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+
+    def _validated_preview_font_family(self, value: object) -> str:
+        family = str(value).strip() if value is not None else ""
+        return family if family in QFontDatabase.families() else QApplication.font().family()
 
     def _bounded_font_size(self, value: object) -> int:
         try:

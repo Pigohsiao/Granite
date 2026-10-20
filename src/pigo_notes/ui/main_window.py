@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
 from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QFont, QFontDatabase, QMouseEvent
+from PySide6.QtGui import QAction, QFont, QFontDatabase, QKeySequence, QMouseEvent, QShortcut
 from PySide6.QtWidgets import (
     QApplication,
+    QAbstractItemView,
     QFontComboBox,
+    QFileDialog,
     QHBoxLayout,
     QLabel,
     QMainWindow,
@@ -40,6 +43,14 @@ class DragBar(QWidget):
                 event.accept()
                 return
         super().mousePressEvent(event)
+
+
+@dataclass(frozen=True)
+class _TreePosition:
+    path: Path
+    viewport_y: int
+    scroll_value: int
+    fallback_slots: tuple[tuple[Path, int], ...]
 
 
 class MainWindow(QMainWindow):
@@ -166,9 +177,13 @@ class MainWindow(QMainWindow):
         self.note_tree = QTreeWidget()
         self.note_tree.setHeaderLabel("檔案總管")
         self.note_tree.setIndentation(18)
+        self.note_tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
         self.note_tree.itemSelectionChanged.connect(self._open_selected_note)
         self.note_tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self.note_tree.customContextMenuRequested.connect(self._show_file_menu)
+        self.delete_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Delete), self.note_tree)
+        self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
+        self.delete_shortcut.activated.connect(self._confirm_selected_recycle)
 
         self.note_preview = QTextBrowser()
         self.note_preview.setOpenExternalLinks(True)
@@ -190,6 +205,11 @@ class MainWindow(QMainWindow):
         refresh.triggered.connect(self.refresh_tree)
         toolbar.addAction(refresh)
 
+        self.select_vault_action = QAction("📂", self)
+        self.select_vault_action.setToolTip("選擇 Vault 資料夾")
+        self.select_vault_action.triggered.connect(self.select_vault_folder)
+        toolbar.addAction(self.select_vault_action)
+
         self.decrease_font_action = QAction("A−", self)
         self.decrease_font_action.setToolTip("縮小閱讀字型")
         self.decrease_font_action.triggered.connect(self.decrease_preview_font)
@@ -209,14 +229,44 @@ class MainWindow(QMainWindow):
         )
         toolbar.addWidget(self.preview_font_selector)
 
-    def refresh_tree(self, *, expanded_folders: set[Path] | None = None) -> None:
+    def select_vault_folder(self) -> None:
+        selected = QFileDialog.getExistingDirectory(
+            self,
+            "選擇 Vault 資料夾",
+            str(self._config.vault_root),
+        )
+        if not selected:
+            return
+        new_root = Path(selected)
+        if not new_root.is_dir():
+            return
+        if new_root == self._config.vault_root:
+            return
+
+        self._config = VaultConfig(app_root=self._config.app_root, vault_root=new_root)
+        self._vault = VaultService(new_root)
+        self._recycle_bin = RecycleBinService(new_root)
+        self._current_note = None
+        self.note_preview.clear()
+        self.refresh_tree()
+        self._save_settings()
+
+    def refresh_tree(
+        self,
+        *,
+        expanded_folders: set[Path] | None = None,
+        tree_position: _TreePosition | None = None,
+    ) -> None:
         self.note_tree.clear()
         folders: dict[Path, QTreeWidgetItem] = {}
+        items_by_path: dict[Path, QTreeWidgetItem] = {}
         for note in self._vault.list_notes():
             parent = self._ensure_folder(note.relative_path.parent, folders)
+            items_by_path.update(folders)
             item = QTreeWidgetItem([note.relative_path.name])
             item.setData(0, Qt.ItemDataRole.UserRole, note.relative_path)
             item.setData(0, Qt.ItemDataRole.UserRole + 1, "file")
+            items_by_path[note.relative_path] = item
             if parent is None:
                 self.note_tree.addTopLevelItem(item)
             else:
@@ -226,6 +276,8 @@ class MainWindow(QMainWindow):
             item = folders.get(folder)
             if item is not None:
                 item.setExpanded(True)
+        if tree_position is not None:
+            self._restore_tree_position(tree_position, items_by_path)
 
     def _ensure_folder(self, folder: Path, folders: dict[Path, QTreeWidgetItem]) -> QTreeWidgetItem | None:
         if folder == Path("."):
@@ -312,24 +364,143 @@ class MainWindow(QMainWindow):
         self.statusBar().showMessage("已複製完整檔案路徑", 3000)
 
     def _confirm_recycle(self, relative_path: Path, is_directory: bool) -> None:
-        item_type = "資料夾" if is_directory else "檔案"
-        answer = QMessageBox.question(
-            self,
-            "移到資源回收桶",
-            f"確定將這個{item_type}移到 Windows 資源回收桶？\n\n{relative_path.as_posix()}",
+        item = self._tree_item_for_path(relative_path)
+        self._confirm_recycle_targets([(relative_path, is_directory)], anchor_item=item)
+
+    def _confirm_selected_recycle(self) -> None:
+        selected = self.note_tree.selectedItems()
+        if not selected:
+            return
+
+        selected_targets = self._selected_recycle_targets()
+        current_item = self.note_tree.currentItem()
+        anchor_item = current_item if current_item in selected else selected[0]
+        self._confirm_recycle_targets(selected_targets, anchor_item=anchor_item)
+
+    def _selected_recycle_targets(self) -> list[tuple[Path, bool]]:
+        selected: list[tuple[Path, bool]] = []
+        selected_folders: set[Path] = set()
+        for item in self.note_tree.selectedItems():
+            relative_path = item.data(0, Qt.ItemDataRole.UserRole)
+            kind = item.data(0, Qt.ItemDataRole.UserRole + 1)
+            if not isinstance(relative_path, Path) or kind not in {"file", "folder"}:
+                continue
+            is_directory = kind == "folder"
+            selected.append((relative_path, is_directory))
+            if is_directory:
+                selected_folders.add(relative_path)
+        return [
+            (path, is_directory)
+            for path, is_directory in selected
+            if not any(parent != path and parent in path.parents for parent in selected_folders)
+        ]
+
+    def _confirm_recycle_targets(
+        self,
+        targets: list[tuple[Path, bool]],
+        *,
+        anchor_item: QTreeWidgetItem | None = None,
+    ) -> None:
+        if not targets:
+            return
+        details = "\n".join(
+            f"{'[資料夾]' if is_directory else '[檔案]'} {path.as_posix()}"
+            for path, is_directory in targets
         )
-        if answer != QMessageBox.StandardButton.Yes:
+        dialog = QMessageBox(self)
+        dialog.setIcon(QMessageBox.Icon.Warning)
+        dialog.setWindowTitle("移到資源回收桶")
+        dialog.setText(f"確定將選取的 {len(targets)} 個項目移到 Windows 資源回收桶？")
+        dialog.setInformativeText(details)
+        dialog.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        dialog.setDefaultButton(QMessageBox.StandardButton.No)
+        if dialog.exec() != QMessageBox.StandardButton.Yes:
             return
+
         expanded_folders = self._expanded_folder_paths()
+        if anchor_item is None:
+            anchor_item = self._tree_item_for_path(targets[0][0])
+        tree_position = self._capture_tree_position(anchor_item) if anchor_item is not None else None
+        error: Exception | None = None
         try:
-            self._recycle_bin.move_to_recycle_bin(relative_path, is_directory=is_directory)
-        except (FileNotFoundError, OSError, RuntimeError, ValueError) as error:
-            QMessageBox.warning(self, "無法移到資源回收桶", str(error))
-            return
-        if self._current_note is not None and (self._current_note == relative_path or is_directory and relative_path in self._current_note.parents):
+            self._recycle_bin.move_many_to_recycle_bin(targets)
+        except (FileNotFoundError, OSError, RuntimeError, ValueError) as caught_error:
+            error = caught_error
+        if self._current_note is not None and not (self._config.vault_root / self._current_note).exists():
             self._current_note = None
             self.note_preview.clear()
-        self.refresh_tree(expanded_folders=expanded_folders)
+        self.refresh_tree(expanded_folders=expanded_folders, tree_position=tree_position)
+        if error is not None:
+            QMessageBox.warning(self, "無法完整移到資源回收桶", str(error))
+
+    def _tree_item_for_path(self, path: Path) -> QTreeWidgetItem | None:
+        matches = self.note_tree.findItems(
+            path.name,
+            Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchRecursive,
+            0,
+        )
+        for item in matches:
+            if item.data(0, Qt.ItemDataRole.UserRole) == path:
+                return item
+        return None
+
+    def _capture_tree_position(self, item: QTreeWidgetItem) -> _TreePosition:
+        path = item.data(0, Qt.ItemDataRole.UserRole)
+        fallback_slots: list[tuple[Path, int]] = []
+        child = item
+        while True:
+            parent = child.parent()
+            if parent is None:
+                fallback_slots.append((Path("."), self.note_tree.indexOfTopLevelItem(child)))
+                break
+            parent_path = parent.data(0, Qt.ItemDataRole.UserRole)
+            fallback_slots.append((parent_path, parent.indexOfChild(child)))
+            child = parent
+        return _TreePosition(
+            path=path,
+            viewport_y=self.note_tree.visualItemRect(item).top(),
+            scroll_value=self.note_tree.verticalScrollBar().value(),
+            fallback_slots=tuple(fallback_slots),
+        )
+
+    def _restore_tree_position(
+        self,
+        position: _TreePosition,
+        items_by_path: dict[Path, QTreeWidgetItem],
+    ) -> None:
+        item = items_by_path.get(position.path)
+        if item is None:
+            for parent_path, sibling_index in position.fallback_slots:
+                parent_item = items_by_path.get(parent_path) if parent_path != Path(".") else None
+                if parent_path != Path(".") and parent_item is None:
+                    continue
+                child_count = parent_item.childCount() if parent_item is not None else self.note_tree.topLevelItemCount()
+                if child_count:
+                    index = min(sibling_index, child_count - 1)
+                    item = parent_item.child(index) if parent_item is not None else self.note_tree.topLevelItem(index)
+                    break
+                if parent_item is not None:
+                    item = parent_item
+                    break
+        if item is None:
+            return
+
+        parent = item.parent()
+        while parent is not None:
+            parent.setExpanded(True)
+            parent = parent.parent()
+        self.note_tree.scrollToItem(item, QTreeWidget.ScrollHint.EnsureVisible)
+        self.note_tree.doItemsLayout()
+        if 0 <= position.viewport_y < self.note_tree.viewport().height():
+            item_rect = self.note_tree.visualItemRect(item)
+            pixel_delta = item_rect.top() - position.viewport_y
+            row_height = max(item_rect.height(), 1)
+            scroll_delta = round(pixel_delta / row_height)
+            self.note_tree.verticalScrollBar().setValue(
+                self.note_tree.verticalScrollBar().value() + scroll_delta
+            )
+        else:
+            self.note_tree.verticalScrollBar().setValue(position.scroll_value)
 
     def _expanded_folder_paths(self) -> set[Path]:
         expanded: set[Path] = set()
@@ -382,6 +553,7 @@ class MainWindow(QMainWindow):
             "preview_font_size": self.preview_font_size,
             "preview_font_family": self.preview_font_family,
             "theme_mode": self.theme_mode,
+            "vault_root": str(self._config.vault_root),
         }
         self._settings_path.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
 

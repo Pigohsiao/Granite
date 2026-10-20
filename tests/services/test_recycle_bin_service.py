@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 import pytest
@@ -43,5 +44,35 @@ def test_recycle_uses_fixed_windows_recycle_bin_script(tmp_path: Path, monkeypat
     assert captured["kwargs"]["capture_output"] is True
     assert captured["kwargs"]["text"] is True
     assert captured["kwargs"]["encoding"] == "utf-8"
-    assert captured["kwargs"]["env"]["PIGO_RECYCLE_TARGET"] == str(note)
-    assert captured["kwargs"]["env"]["PIGO_RECYCLE_KIND"] == "file"
+    items = json.loads(captured["kwargs"]["env"]["PIGO_RECYCLE_ITEMS"])
+    assert items == [{"path": str(note), "kind": "file"}]
+
+
+def test_recycle_many_items_uses_one_powershell_process(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    vault = tmp_path / "vault"
+    folder = vault / "Folder"
+    folder.mkdir(parents=True)
+    first_note = folder / "First.md"
+    second_note = vault / "Second.md"
+    first_note.write_text("# First\n", encoding="utf-8")
+    second_note.write_text("# Second\n", encoding="utf-8")
+    calls: list[tuple[list[str], dict[str, object]]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> object:
+        calls.append((command, kwargs))
+        return type("Result", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("pigo_notes.services.recycle_bin_service.subprocess.run", fake_run)
+    RecycleBinService(vault).move_many_to_recycle_bin(
+        [(Path("Folder"), True), (Path("Second.md"), False)]
+    )
+
+    assert len(calls) == 1
+    command, kwargs = calls[0]
+    assert "SendToRecycleBin" in command[4]
+    assert kwargs["env"]["PIGO_RECYCLE_ITEMS"] == json.dumps(
+        [
+            {"path": str(folder.resolve()), "kind": "directory"},
+            {"path": str(second_note.resolve()), "kind": "file"},
+        ]
+    )

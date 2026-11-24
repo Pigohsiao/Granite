@@ -135,6 +135,38 @@ def test_markdown_preview_renders_standard_multiline_table() -> None:
     assert probe.tables[0] == [["欄位", "負責人"], ["設計", "Pigo"], ["驗證", "Luna"]]
 
 
+def test_markdown_preview_renders_multiline_table_after_plain_paragraph() -> None:
+    source = """行動要求列表：
+| ACTION | Owner | Due date | Status |
+|---|---|---|---|
+| Review report | Pigo | 2026-11-03 | Pending |
+"""
+
+    html = MarkdownService().render(source)
+    probe = _probe_tables(html)
+
+    assert "行動要求列表：" in html
+    assert len(probe.tables) == 1, f"HTML: {html!r}"
+    assert probe.tables[0] == [
+        ["ACTION", "Owner", "Due date", "Status"],
+        ["Review report", "Pigo", "2026-11-03", "Pending"],
+    ]
+
+
+def test_markdown_preview_keeps_code_span_inside_table_after_paragraph() -> None:
+    source = """行動要求列表：
+| ACTION | Status |
+|---|---|
+| Check `build` output | Done |
+"""
+
+    html = MarkdownService().render(source)
+    probe = _probe_tables(html)
+
+    assert len(probe.tables) == 1, f"HTML: {html!r}"
+    assert probe.tables[0] == [["ACTION", "Status"], ["Check build output", "Done"]]
+
+
 def test_markdown_preview_renders_compact_four_column_table() -> None:
     source = "| 行動 | 負責人 | 期限 | 狀態 | | --- | --- | --- | --- | | 參閱報表 | 收件者 | 未提供 | 郵件請求 |"
 

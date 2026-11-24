@@ -448,9 +448,44 @@
 - If verification still failed, the failure reason and blocker: 無。遠端已接受 push；未 force push。
 - What the next step should be: 追加本次完成狀態的文件提交並推送，確認遠端 HEAD 與工作樹乾淨。
 
+# STATUS_2026-11-24_downloads_table_render_diagnosis
+
+- What changes were made: 唯讀比對 Downloads 中 2026-11-03 與 2026-11-14 兩份 Markdown 的表格區塊；未修改原始 Markdown 或程式碼。根因為 11/03 表格前的「行動要求列表：」是一般段落，且與表格 header 間沒有空行，Python-Markdown 未將表格識別為獨立區塊。
+- Whether verification succeeded or failed: 使用目前 `MarkdownService` 重現 11/03 原文為 0 個 table、11/14 為 4 個 table；僅在記憶體副本於每個 table 前插入空行後，11/03 的 11 個標準表格全數被識別。原始檔讀回內容未變。
+- If verification still failed, the failure reason and blocker: 無診斷阻礙。尚未實作修正，因本次請求是詢問原因。
+- What the next step should be: 若 Pigo 要求修復，可選擇在 renderer 加入保守的段落標籤到表格區塊邊界處理，或僅對該文件補上空行；需先確認要修 app 通用行為或只修單一檔案。
+
+# STATUS_2026-11-24_general_table_boundary_design
+
+- What changes were made: 提出通用修正方向：在 renderer 的記憶體副本中，若一般段落後緊接著符合表頭、delimiter 與欄數一致條件的 pipe table，補上 Markdown 區塊分隔空行；不以特定中文標題字串做規則，也不改來源筆記。未修改程式碼或 Downloads 文件。
+- Whether verification succeeded or failed: 設計建議基於 11/03 與 11/14 樣本對照及記憶體控制實驗；未執行實作測試。
+- If verification still failed, the failure reason and blocker: 無；等待 Pigo 確認是否採用通用 renderer 修正。
+- What the next step should be: Pigo 核准後，先提供具體實作計畫，再按 TDD 加入有效多行表格、原樣本型態及 code/prose/錯誤欄數保護測試。
+
+# STATUS_2026-11-24_adjacent_multiline_table_fix
+
+- What changes were made: 在 Markdown renderer 的記憶體預處理中，為一般段落後緊接且表頭、delimiter、資料欄數一致的頂層多行表格補上區塊分隔；保留來源文字不變，避免清單、標題、圍欄程式碼、HTML 註解或不規則欄位被誤判。加入一般表格及儲存格含 inline code 的回歸測試。
+- Whether verification succeeded or failed: TDD 回歸測試先 RED 後 GREEN；服務測試 17 passed，完整 pytest 98 passed，`git diff --check` 通過。實際 11/03 檔案輸出 11 個表格，11/14 檔案仍輸出 4 個表格。
+- If verification still failed, the failure reason and blocker: 無。曾於首次 GREEN 時發現並修正語法括號錯誤；後續 targeted、服務及完整測試均通過。
+- What the next step should be: 關閉已啟動的舊版 Pigo Notes App，再以桌面 BAT 重新啟動並檢視 11/03 文件；若 Pigo 希望同步推送此修正，再另行 commit/push。
+
 # STATUS_2026-11-24_precommit_performance_rerun
 
 - What changes were made: 提交前全套測試首次執行為 95 passed、1 failed；唯一失敗是既有 10k synthetic backlinks p95 短暫量得 120.81 ms（門檻 100 ms）。未修改程式或測試門檻。
 - Whether verification succeeded or failed: 單獨重跑 `tests/performance/test_reader_performance.py` 通過，backlinks p95 35.69 ms；完整套件仍需重跑一次確認。
 - If verification still failed, the failure reason and blocker: 首次全套結果有一個效能波動失敗；尚未證明全套穩定通過。
 - What the next step should be: 再跑完整 pytest；若全綠，再檢查 diff/提交清單並 commit/push；若再次超標，停止推送並調查效能波動。
+
+# STATUS_2026-11-25_commit_and_push_markdown_table_fix
+
+- What changes were made: 準備提交 Markdown 表格預覽修正、兩個回歸測試與既有狀態紀錄；從 Git 索引排除 `.pytest-*` 測試暫存產物，並依目前分支追蹤設定推送至 `granite/main`。
+- Whether verification succeeded or failed: 尚待執行服務測試、差異檢查與推送後遠端狀態確認。
+- If verification still failed, the failure reason and blocker: 尚無。
+- What the next step should be: 測試通過後提交並推送，再確認本地與遠端狀態一致。
+
+# STATUS_2026-11-25_push_authentication_blocker
+
+- What changes were made: 已提交 Markdown 表格預覽修正與回歸測試；推送 `granite/main` 時 SSH 驗證遭拒，遠端尚未收到本次提交。
+- Whether verification succeeded or failed: 服務測試 17 passed，提交前 `git diff --cached --check` 通過；推送失敗。
+- If verification still failed, the failure reason and blocker: `git@github.com: Permission denied (publickey)`，目前環境沒有可用的該遠端 SSH 公鑰驗證。
+- What the next step should be: 設定此遠端可用的 GitHub SSH 金鑰或認證後，再推送本地 `main` 至 `granite`。

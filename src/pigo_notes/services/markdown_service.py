@@ -53,7 +53,8 @@ class MarkdownService:
         fence_length = 0
         inside_comment = False
 
-        for line in source.splitlines(keepends=True):
+        lines = source.splitlines(keepends=True)
+        for index, line in enumerate(lines):
             text = line.rstrip("\r\n")
             marker = cls._FENCE_MARKER.match(text)
             if fence_character is not None:
@@ -77,6 +78,13 @@ class MarkdownService:
                 normalized_lines.append(line)
                 continue
 
+            previous_line = normalized_lines[-1].rstrip("\r\n") if normalized_lines else ""
+            if (
+                cls._is_plain_paragraph_line(previous_line)
+                and cls._is_multiline_table_start(lines, index)
+            ):
+                normalized_lines.append("\r\n" if line.endswith("\r\n") else "\n")
+
             replacement = cls._normalize_compact_table_line(text)
             if replacement is None:
                 normalized_lines.append(line)
@@ -85,6 +93,78 @@ class MarkdownService:
                 normalized_lines.append(replacement + ending)
 
         return "".join(normalized_lines)
+
+    @classmethod
+    def _is_plain_paragraph_line(cls, line: str) -> bool:
+        if not line or line != line.lstrip(" \t"):
+            return False
+        return not re.match(r"(?:#{1,6}\s|>|(?:[-+*]|\d+[.)])\s|`{3,}|~{3,}|\||<!--|<)", line)
+
+    @classmethod
+    def _is_multiline_table_start(cls, lines: list[str], index: int) -> bool:
+        if index + 2 >= len(lines) or lines[index] != lines[index].lstrip(" \t"):
+            return False
+
+        headers = cls._split_pipe_row(lines[index])
+        delimiters = cls._split_pipe_row(lines[index + 1])
+        if (
+            headers is None
+            or delimiters is None
+            or not headers
+            or len(headers) != len(delimiters)
+            or any(not cls._TABLE_DELIMITER.fullmatch(cell) for cell in delimiters)
+        ):
+            return False
+
+        data_rows = 0
+        for line in lines[index + 2:]:
+            cells = cls._split_pipe_row(line)
+            if cells is None:
+                break
+            if len(cells) != len(headers):
+                return False
+            data_rows += 1
+        return data_rows > 0
+
+    @staticmethod
+    def _split_pipe_row(line: str) -> list[str] | None:
+        text = line.strip()
+        if not text.startswith("|") or not text.endswith("|"):
+            return None
+
+        cells: list[str] = []
+        current: list[str] = []
+        content = text[1:-1]
+        code_ticks = 0
+        index = 0
+        while index < len(content):
+            character = content[index]
+            if character == "\\" and index + 1 < len(content):
+                current.extend(content[index:index + 2])
+                index += 2
+                continue
+            if character == "`":
+                end = index + 1
+                while end < len(content) and content[end] == "`":
+                    end += 1
+                tick_count = end - index
+                current.extend(content[index:end])
+                if code_ticks == 0:
+                    code_ticks = tick_count
+                elif code_ticks == tick_count:
+                    code_ticks = 0
+                index = end
+                continue
+            if character == "|" and code_ticks == 0:
+                cells.append("".join(current).strip())
+                current = []
+            else:
+                current.append(character)
+            index += 1
+        if code_ticks:
+            return None
+        cells.append("".join(current).strip())
+        return cells
 
     @classmethod
     def _normalize_compact_table_line(cls, line: str) -> str | None:

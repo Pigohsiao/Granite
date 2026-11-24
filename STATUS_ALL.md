@@ -437,9 +437,16 @@
 # STATUS_2026-11-24_full_project_commit_push_authorized
 
 - What changes were made: Pigo 明確核准將目前專案所有實際變更一併 commit/push。預定納入程式碼、測試、計畫/專案文件及 STATUS_ALL.md；產生的測試暫存、快取與工具輸出仍排除。
-- Whether verification succeeded or failed: 尚未暫存、提交或推送；正在進行提交前完整測試與內容清查。
-- If verification still failed, the failure reason and blocker: 無；若完整測試失敗或發現敏感資料/非預期產物，先停止推送並回報。
-- What the next step should be: 完整 pytest 與 diff/內容檢查通過後，納入所有已授權內容 commit 到 main 並 push origin，最後確認遠端 HEAD。
+- Whether verification succeeded or failed: 完整 pytest 96 passed；`git diff --cached --check` 通過；提交 `0c53e81` 已成功推送至 `origin/main`。
+- If verification still failed, the failure reason and blocker: 無。第一次 sandbox 內 push 因 DNS 不能解析 `github-lumentum` alias 失敗，受控網路重試成功；未 force push、未更改 remote。
+- What the next step should be: 將本次 push 成果追加到 STATUS_ALL，提交該文件紀錄並同步推送，然後確認工作樹與遠端 HEAD。
+
+# STATUS_2026-11-24_full_project_push_completed
+
+- What changes were made: 依 Pigo「完整推送」指示，將專案目前所有實際變更（程式、測試、README/設定、計畫文件及 STATUS_ALL）納入提交；排除虛擬環境、pytest 暫存、cache 與工具輸出。commit `0c53e81`：`feat: add indexed reader and improve markdown table preview`。
+- Whether verification succeeded or failed: 提交前完整 pytest 96 passed；曾有一次 10k backlinks p95 波動失敗，單獨重跑及第二次完整套件均通過；staged `git diff --check` exit 0；commit 已 push 到 `origin/main`。
+- If verification still failed, the failure reason and blocker: 無。遠端已接受 push；未 force push。
+- What the next step should be: 追加本次完成狀態的文件提交並推送，確認遠端 HEAD 與工作樹乾淨。
 
 # STATUS_2026-11-24_precommit_performance_rerun
 

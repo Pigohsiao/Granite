@@ -361,3 +361,29 @@ def test_preview_document_has_markdown_table_styles(tmp_path: Path) -> None:
 
     window.close()
     app.processEvents()
+
+
+def test_main_window_starts_vault_scoped_background_index(tmp_path: Path) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    window = MainWindow(config)
+
+    assert window._index_controller is not None
+    assert window._index_controller._config.vault_root == config.vault_root
+    window.close()
+    app.processEvents()
+
+
+def test_vault_switch_updates_background_index_session(tmp_path: Path, monkeypatch) -> None:
+    app = QApplication.instance() or QApplication([])
+    config = make_config(tmp_path)
+    new_vault = tmp_path / "new-vault"
+    new_vault.mkdir()
+    window = MainWindow(config)
+    monkeypatch.setattr(main_window_module.QFileDialog, "getExistingDirectory", lambda *args: str(new_vault))
+
+    window.select_vault_folder()
+
+    assert window._index_controller._config.vault_root == new_vault
+    window.close()
+    app.processEvents()

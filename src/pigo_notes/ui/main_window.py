@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
+import sqlite3
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import unquote
 
-from PySide6.QtCore import Qt
-from PySide6.QtGui import QAction, QFont, QFontDatabase, QKeySequence, QMouseEvent, QShortcut
+from PySide6.QtCore import Qt, QUrl, QTimer
+from PySide6.QtGui import QAction, QCloseEvent, QDesktopServices, QFont, QFontDatabase, QKeySequence, QMouseEvent, QShortcut, QTextDocument
 from PySide6.QtWidgets import (
     QApplication,
     QAbstractItemView,
     QFontComboBox,
     QFileDialog,
+    QGroupBox,
     QHBoxLayout,
+    QInputDialog,
     QLabel,
+    QListWidget,
     QMainWindow,
     QMenu,
     QMessageBox,
@@ -24,13 +29,17 @@ from PySide6.QtWidgets import (
     QToolBar,
     QTreeWidget,
     QTreeWidgetItem,
+    QVBoxLayout,
     QWidget,
 )
 
 from pigo_notes.config import VaultConfig
 from pigo_notes.services.markdown_service import MarkdownService
 from pigo_notes.services.recycle_bin_service import RecycleBinService
+from pigo_notes.services.reading_session_service import ReadingSessionService
 from pigo_notes.services.vault_service import VaultService
+from pigo_notes.ui.index_controller import IndexController
+from pigo_notes.ui.navigation_panel import NavigationPanel
 
 
 class DragBar(QWidget):
@@ -43,6 +52,18 @@ class DragBar(QWidget):
                 event.accept()
                 return
         super().mousePressEvent(event)
+
+
+class SafePreviewBrowser(QTextBrowser):
+    """Reader preview that never fetches images or local/remote embedded resources."""
+
+    def loadResource(self, resource_type: int, name: QUrl):
+        if resource_type == QTextDocument.ResourceType.ImageResource:
+            return None
+        url = name if isinstance(name, QUrl) else QUrl(str(name))
+        if url.scheme().casefold() in {"file", "http", "https", "ftp", "data", "javascript"}:
+            return None
+        return super().loadResource(resource_type, name)
 
 
 @dataclass(frozen=True)
@@ -146,7 +167,27 @@ class MainWindow(QMainWindow):
         self._apply_theme(persist=False)
         self.set_preview_font_size(self.preview_font_size, persist=False)
         self.set_preview_font_family(self.preview_font_family, persist=False)
+        self._index_controller = IndexController(config)
+        self._index_controller.statusChanged.connect(self.statusBar().showMessage)
+        self._index_controller.searchFinished.connect(self._search_finished)
+        self._index_controller.contextFinished.connect(self._note_context_finished)
+        self._index_controller.tagsFinished.connect(self._tags_finished)
+        self._index_controller.refreshFinished.connect(self._refresh_finished)
+        self.navigation_panel.tagsRequested.connect(self._index_controller.request_tags)
+        self._reading_session = ReadingSessionService(config.app_root, config.vault_root)
+        self.navigation_panel.set_recent(self._reading_session.recent())
+        self._update_history_actions()
+        self._search_offset = 0
         self.refresh_tree()
+        self._index_controller.start_vault(config)
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        self._position_save_timer.stop()
+        self._save_preview_position()
+        controller = getattr(self, "_index_controller", None)
+        if controller is not None:
+            controller.shutdown()
+        super().closeEvent(event)
 
     @property
     def current_note(self) -> Path | None:
@@ -185,13 +226,57 @@ class MainWindow(QMainWindow):
         self.delete_shortcut.setContext(Qt.ShortcutContext.WidgetWithChildrenShortcut)
         self.delete_shortcut.activated.connect(self._confirm_selected_recycle)
 
-        self.note_preview = QTextBrowser()
-        self.note_preview.setOpenExternalLinks(True)
+        self.note_preview = SafePreviewBrowser()
+        self.note_preview.setOpenExternalLinks(False)
+        self.note_preview.anchorClicked.connect(self._route_preview_link)
         self.note_preview.setPlaceholderText("選擇一篇 Markdown 筆記開始預覽")
 
+        self.note_details = QWidget()
+        details_layout = QVBoxLayout(self.note_details)
+        details_layout.setContentsMargins(8, 4, 8, 8)
+        self.note_details.backlinks_group = QGroupBox("反向連結（最多 100 篇）")
+        self.note_details.backlinks_group.setCheckable(True)
+        self.note_details.backlinks_group.setChecked(False)
+        backlinks_layout = QVBoxLayout(self.note_details.backlinks_group)
+        self.note_details.backlink_list = QListWidget()
+        self.note_details.backlink_list.itemActivated.connect(self._open_backlink_item)
+        backlinks_layout.addWidget(self.note_details.backlink_list)
+        self.note_details.backlinks_group.toggled.connect(
+            lambda checked: self._set_group_contents_visible(self.note_details.backlinks_group, checked)
+        )
+        self._set_group_contents_visible(self.note_details.backlinks_group, False)
+        details_layout.addWidget(self.note_details.backlinks_group)
+        self.note_details.properties_group = QGroupBox("Properties")
+        self.note_details.properties_group.setCheckable(True)
+        self.note_details.properties_group.setChecked(False)
+        properties_layout = QVBoxLayout(self.note_details.properties_group)
+        self.note_details.properties_text = QLabel("選取筆記後顯示唯讀屬性")
+        self.note_details.properties_text.setWordWrap(True)
+        properties_layout.addWidget(self.note_details.properties_text)
+        details_layout.addWidget(self.note_details.properties_group)
+        self.note_details.properties_group.toggled.connect(
+            lambda checked: self._set_group_contents_visible(self.note_details.properties_group, checked)
+        )
+        self._set_group_contents_visible(self.note_details.properties_group, False)
+
+        self.reader_pane = QWidget()
+        reader_layout = QVBoxLayout(self.reader_pane)
+        reader_layout.setContentsMargins(0, 0, 0, 0)
+        reader_layout.setSpacing(0)
+        reader_layout.addWidget(self.note_preview, 1)
+        reader_layout.addWidget(self.note_details)
+        self._position_save_timer = QTimer(self)
+        self._position_save_timer.setSingleShot(True)
+        self._position_save_timer.setInterval(300)
+        self._position_save_timer.timeout.connect(self._save_preview_position)
+        self.note_preview.verticalScrollBar().valueChanged.connect(lambda _value: self._position_save_timer.start())
+
+        self.navigation_panel = NavigationPanel(self.note_tree)
+        self.navigation_panel.searchRequested.connect(self._run_search)
+        self.navigation_panel.resultActivated.connect(self._open_search_result)
         self.workspace = QSplitter(Qt.Orientation.Horizontal)
-        self.workspace.addWidget(self.note_tree)
-        self.workspace.addWidget(self.note_preview)
+        self.workspace.addWidget(self.navigation_panel)
+        self.workspace.addWidget(self.reader_pane)
         self.workspace.setSizes([300, 880])
         self.setCentralWidget(self.workspace)
 
@@ -199,6 +284,15 @@ class MainWindow(QMainWindow):
         toolbar = QToolBar("工具列")
         toolbar.setMovable(False)
         self.addToolBar(toolbar)
+
+        self.back_action = QAction("←", self)
+        self.back_action.setToolTip("返回上一個閱讀位置")
+        self.back_action.triggered.connect(lambda: self._move_reading_history(-1))
+        toolbar.addAction(self.back_action)
+        self.forward_action = QAction("→", self)
+        self.forward_action.setToolTip("前往下一個閱讀位置")
+        self.forward_action.triggered.connect(lambda: self._move_reading_history(1))
+        toolbar.addAction(self.forward_action)
 
         refresh = QAction("↻", self)
         refresh.setToolTip("重新掃描檔案樹")
@@ -249,6 +343,10 @@ class MainWindow(QMainWindow):
         self._current_note = None
         self.note_preview.clear()
         self.refresh_tree()
+        self.navigation_panel.clear_results()
+        self._index_controller.start_vault(self._config)
+        self._reading_session = ReadingSessionService(self._config.app_root, self._config.vault_root)
+        self.navigation_panel.set_recent(self._reading_session.recent())
         self._save_settings()
 
     def refresh_tree(
@@ -525,19 +623,159 @@ class MainWindow(QMainWindow):
         if item_kind == "file" and isinstance(relative_path, Path):
             self._set_current_note(relative_path)
 
-    def _set_current_note(self, relative_path: Path) -> None:
-        self._current_note = relative_path
+    def _set_current_note(self, relative_path: Path, *, expand_tree: bool = True, record_history: bool = True) -> None:
+        if self._current_note is not None:
+            self._reading_session.set_position(
+                self._current_note, self.note_preview.verticalScrollBar().value()
+            )
         content = self._vault.read_note(relative_path)
+        self._current_note = relative_path
         self.note_preview.setHtml(self._markdown.render(content))
-        self._expand_note_ancestors(relative_path)
+        if record_history:
+            self._reading_session.record(relative_path)
+        self.navigation_panel.set_recent(self._reading_session.recent())
+        QTimer.singleShot(0, lambda: self.note_preview.verticalScrollBar().setValue(self._reading_session.position(relative_path)))
+        self._update_history_actions()
+        if expand_tree:
+            self._expand_note_ancestors(relative_path)
+        self._index_controller.request_note_context(relative_path, source=content)
+
+    def _save_preview_position(self) -> None:
+        if self._current_note is not None and hasattr(self, "_reading_session"):
+            self._reading_session.set_position(self._current_note, self.note_preview.verticalScrollBar().value())
+
+    def _move_reading_history(self, direction: int) -> None:
+        path = self._reading_session.move_history(direction)
+        if path is None:
+            return
+        try:
+            self._set_current_note(path, record_history=False)
+        except (OSError, UnicodeError, ValueError):
+            self.statusBar().showMessage("閱讀歷史中的筆記已不存在")
+        self._update_history_actions()
+
+    def _update_history_actions(self) -> None:
+        if not hasattr(self, "back_action"):
+            return
+        state = self._reading_session._read_state()
+        history = state.get("history", [])
+        index = state.get("history_index", -1)
+        self.back_action.setEnabled(isinstance(index, int) and index > 0)
+        self.forward_action.setEnabled(isinstance(history, list) and isinstance(index, int) and index < len(history) - 1)
+
+    def _route_preview_link(self, url: QUrl) -> None:
+        scheme = url.scheme().casefold()
+        if scheme in {"http", "https"}:
+            if url.isValid() and url.host() and not url.userName() and not url.password():
+                QDesktopServices.openUrl(url)
+            else:
+                self.statusBar().showMessage("拒絕無效的外部連結")
+            return
+        if scheme != "pigo-note" or url.host().casefold() != "open":
+            self.statusBar().showMessage("拒絕不安全的連結")
+            return
+        encoded = url.path(QUrl.ComponentFormattingOption.FullyEncoded).lstrip("/")
+        try:
+            target = unquote(encoded, errors="strict")
+        except (UnicodeDecodeError, ValueError):
+            self.statusBar().showMessage("拒絕無效的筆記連結")
+            return
+        if self._current_note is None:
+            self.statusBar().showMessage("請先開啟一篇筆記")
+            return
+        try:
+            resolution = self._index_controller.resolve_link(self._current_note, target)
+        except (OSError, ValueError, RuntimeError, sqlite3.Error) as error:
+            self.statusBar().showMessage(f"無法解析筆記連結：{error}")
+            return
+        if resolution.status == "rejected":
+            self.statusBar().showMessage("拒絕不安全的筆記路徑")
+            return
+        if resolution.status == "missing":
+            self.statusBar().showMessage("找不到這篇筆記")
+            return
+        if resolution.status == "ambiguous":
+            choices = [path.as_posix() for path in resolution.candidates]
+            choice, accepted = QInputDialog.getItem(self, "選擇筆記", "找到多篇同名筆記：", choices, 0, False)
+            if not accepted or choice not in choices:
+                return
+            resolved = resolution.candidates[choices.index(choice)]
+        else:
+            resolved = resolution.candidates[0]
+        try:
+            self._set_current_note(resolved)
+            if resolution.fragment:
+                self.statusBar().showMessage(f"已開啟 {resolved.as_posix()}（片段 #{resolution.fragment} 尚未定位）")
+        except (OSError, UnicodeError, ValueError) as error:
+            self.statusBar().showMessage(f"無法開啟筆記：{error}")
+
+    def _note_context_finished(self, _session: int, path: object, properties: object, backlinks: object, _error: str) -> None:
+        if path != self._current_note:
+            return
+        self.note_details.properties_text.setText(
+            json.dumps(properties, ensure_ascii=False, indent=2) if properties else "沒有 Properties"
+        )
+        self.note_details.backlink_list.clear()
+        for backlink in backlinks or []:
+            from PySide6.QtWidgets import QListWidgetItem
+
+            item = QListWidgetItem(backlink.as_posix())
+            item.setData(Qt.ItemDataRole.UserRole, backlink)
+            self.note_details.backlink_list.addItem(item)
+
+    def _tags_finished(self, _session: int, tags: object, error: str) -> None:
+        if error:
+            self.statusBar().showMessage(f"載入標籤失敗：{error}")
+            return
+        self.navigation_panel.set_tags(tags or [])
+
+    def _refresh_finished(self, _session: int, _report: object, error: str) -> None:
+        if error:
+            self.statusBar().showMessage(f"索引更新失敗：{error}")
+        else:
+            self._index_controller.request_tags()
+
+    def _open_backlink_item(self, item: object) -> None:
+        path = item.data(Qt.ItemDataRole.UserRole)
+        if isinstance(path, Path):
+            self._set_current_note(path)
+
+    @staticmethod
+    def _set_group_contents_visible(group: QGroupBox, visible: bool) -> None:
+        layout = group.layout()
+        if layout is not None:
+            for index in range(layout.count()):
+                widget = layout.itemAt(index).widget()
+                if widget is not None:
+                    widget.setVisible(visible)
+        group.setMaximumHeight(16777215 if visible else 34)
+
+    def _run_search(self, query: str, tag: object, offset: int) -> None:
+        self._search_offset = offset
+        if offset == 0:
+            self.navigation_panel.clear_results()
+        self._index_controller.request_search(query, tag if isinstance(tag, str) else None, offset)
+
+    def _search_finished(self, _session: int, _request: int, results: object, error: str) -> None:
+        if error:
+            self.statusBar().showMessage(f"搜尋失敗：{error}")
+            self.navigation_panel.result_hint.setText("搜尋索引目前無法使用")
+            return
+        self.navigation_panel.set_results(results or [], append=self._search_offset > 0)
+
+    def _open_search_result(self, relative_path: object) -> None:
+        if isinstance(relative_path, Path):
+            try:
+                self._set_current_note(relative_path, expand_tree=False)
+            except (OSError, UnicodeError, ValueError) as error:
+                self.statusBar().showMessage(f"無法開啟筆記：{error}")
 
     def _expand_note_ancestors(self, relative_path: Path) -> None:
         folder = relative_path.parent
         while folder != Path("."):
-            for item in self.note_tree.findItems(folder.name, Qt.MatchFlag.MatchExactly | Qt.MatchFlag.MatchRecursive):
-                if item.data(0, Qt.ItemDataRole.UserRole + 1) == "folder":
-                    item.setExpanded(True)
-                    break
+            item = self._tree_item_for_path(folder)
+            if item is not None:
+                item.setExpanded(True)
             folder = folder.parent
 
     def _load_settings(self) -> dict[str, object]:

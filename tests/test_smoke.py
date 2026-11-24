@@ -8,8 +8,15 @@ from pigo_notes.config import VaultConfig
 from pigo_notes.ui.main_window import MainWindow
 
 
-def test_application_constructs_against_the_configured_vault() -> None:
-    config = VaultConfig.default()
+def test_application_constructs_against_an_isolated_test_vault(tmp_path, monkeypatch) -> None:
+    monkeypatch.setattr(
+        VaultConfig,
+        "default",
+        classmethod(lambda cls: (_ for _ in ()).throw(AssertionError("real Vault defaults are forbidden in tests"))),
+    )
+    config = VaultConfig(app_root=tmp_path / "app", vault_root=tmp_path / "vault")
+    config.app_root.mkdir()
+    config.vault_root.mkdir()
     config.validate()
     app = QApplication.instance() or QApplication([])
 

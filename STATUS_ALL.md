@@ -489,3 +489,24 @@
 - Whether verification succeeded or failed: 服務測試 17 passed，提交前 `git diff --cached --check` 通過；推送失敗。
 - If verification still failed, the failure reason and blocker: `git@github.com: Permission denied (publickey)`，目前環境沒有可用的該遠端 SSH 公鑰驗證。
 - What the next step should be: 設定此遠端可用的 GitHub SSH 金鑰或認證後，再推送本地 `main` 至 `granite`。
+
+# STATUS_2026-11-25_tmp_directory_cleanup_check
+
+- What changes were made: 檢查專案根目錄 31 個 `.tmp*`／`.pytest*` 暫存與測試目錄；嘗試僅刪除空目錄，未使用遞迴刪除，未更動 Vault 或停止應用程式。
+- Whether verification succeeded or failed: 清理未完成；確認 31 個目錄仍存在。
+- If verification still failed, the failure reason and blocker: Windows 回報存取被拒，無法讀取或移除這些目錄；因此未能確認其內容，全部保留。
+- What the next step should be: 由目錄擁有者檢查／修正這些目錄的存取權限，再確認內容是否可刪；不建議在未檢視內容前強制遞迴刪除。
+
+# STATUS_2026-11-25_ssh_key_availability_check
+
+- What changes were made: 唯讀檢查使用者 `.ssh` 目錄，找到 4 組私鑰/公鑰檔案配對，並逐一取得公鑰指紋；未讀取私鑰內容。
+- Whether verification succeeded or failed: 找到 4 組 key pair。GitHub 認證可用性未能確認，4 次連線都在主機金鑰驗證階段被擋下，尚未進入使用者金鑰驗證；SSH agent 也未啟動。
+- If verification still failed, the failure reason and blocker: `Host key verification failed`，且目前執行環境無法讀取 `.ssh/known_hosts`；`ssh-add -l` 回報無法連線至 agent。
+- What the next step should be: 恢復此環境對可信 `known_hosts` 的讀取，並啟動含有預期 key 的 SSH agent，再重試 GitHub 認證與推送。
+
+# STATUS_2026-11-25_push_succeeded_with_lumentum_key
+
+- What changes were made: 使用 `id_ed25519_pigohsiao_lumentum` 對 GitHub 認證成功，並將提交 `4b10160` 推送至 `granite/main`；遠端分支已更新至相同提交。
+- Whether verification succeeded or failed: GitHub SSH 認證成功；推送成功；Markdown 服務測試先前結果為 17 passed。
+- If verification still failed, the failure reason and blocker: 無。
+- What the next step should be: 無需後續動作；若清理工作目錄，可另行移除未追蹤的 `.pytest-*` 測試暫存目錄。
